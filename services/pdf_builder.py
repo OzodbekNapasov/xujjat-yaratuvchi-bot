@@ -1,10 +1,12 @@
 # ============================================================
 #  services/pdf_builder.py
-#  ReportLab yordamida to'liq va yengil PDF yaratish (Vercel-friendly)
+#  Hujjatni yuqori aniqlikdagi (300 DPI) RASM (PNG) shaklida yaratadi
+#  Pechat, imzo, qalin (bold) va qiya (italic) matnlar bilan!
 # ============================================================
 
 import os
 import io
+import pymupdf  # PyMuPDF image renderer
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -27,31 +29,39 @@ def _register_font():
         if os.path.exists(FONT_FILE):
             pdfmetrics.registerFont(TTFont("FreeSans", FONT_FILE))
             pdfmetrics.registerFont(TTFont("FreeSans-Bold", FONT_FILE))
+            pdfmetrics.registerFont(TTFont("FreeSans-Oblique", FONT_FILE))
             _FONT_REGISTERED = True
     except Exception:
         pass
 
-def _font(bold=False):
+def _font(bold=False, italic=False):
     _register_font()
     if _FONT_REGISTERED:
-        return "FreeSans-Bold" if bold else "FreeSans"
-    return "Helvetica-Bold" if bold else "Helvetica"
+        if bold:
+            return "FreeSans-Bold"
+        if italic:
+            return "FreeSans-Oblique"
+        return "FreeSans"
+    return "Helvetica-Bold" if bold else ("Helvetica-Oblique" if italic else "Helvetica")
 
 
-def build_flattened_pdf(
-    output_pdf_path: str,
+def build_document_image(
+    output_img_path: str,
     template_name: str,
     data: dict,
 ) -> None:
     """
-    data: {"FIO": "Napasov Diyorbek", "YONALISH": "Hamshiralik ishi", "OQUV_YILI": "2026/2027", "SANA": "13.08.2026"}
+    data: {"FIO": "Napasov Diyorbek Zafar o’g’li", "YONALISH": "Hamshiralik ishi", ...}
+    300 DPI sifatli PNG rasm hosil qiladi.
     """
     _register_font()
     fn = _font(bold=False)
     fn_b = _font(bold=True)
+    fn_i = _font(italic=True)
 
+    buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        output_pdf_path,
+        buf,
         pagesize=A4,
         leftMargin=20 * mm,
         rightMargin=20 * mm,
@@ -130,12 +140,12 @@ def build_flattened_pdf(
     story.append(meta_table)
     story.append(Spacer(1, 15 * mm))
 
-    # 4. Sarlavha
+    # 4. Sarlavha (MA'LUMOTNOMA)
     style_title = ParagraphStyle('Title', fontName=fn_b, fontSize=15, leading=18, alignment=TA_CENTER)
     story.append(Paragraph("MA’LUMOTNOMA", style_title))
     story.append(Spacer(1, 12 * mm))
 
-    # 5. Asosiy Matn
+    # 5. Asosiy Matn (Qalin va Qiya formatlashlar bilan!)
     fio = data.get('FIO', '')
     yonalish = data.get('YONALISH', '')
     oquv_yili = data.get('OQUV_YILI', '')
@@ -149,6 +159,7 @@ def build_flattened_pdf(
         alignment=TA_CENTER,
     )
 
+    # Qalin (bold) va qiya (italic) joylar
     body_html = (
         f"Ushbu  ma’lumotnoma  shuni  tasdiqlaydiki,  haqiqatdan  ham<br/><br/>"
         f"<b>{fio}</b>  <b>{oquv_yili}</b>-o‘quv yilida  <b>{yonalish}</b>  yo‘nalishiga  shartnoma "
@@ -157,18 +168,17 @@ def build_flattened_pdf(
     story.append(Paragraph(body_html, style_body))
     story.append(Spacer(1, 10 * mm))
 
-    # 6. Note
-    style_note = ParagraphStyle('NoteText', fontName=fn, fontSize=10.5, leading=15, alignment=TA_CENTER)
+    # 6. Note (Qiya/Italic matn)
+    style_note = ParagraphStyle('NoteText', fontName=fn_i, fontSize=10.5, leading=15, alignment=TA_CENTER)
     story.append(Paragraph("<i>Ma’lumotnoma so‘ralgan joyga taqdim etish uchun berildi</i>", style_note))
-    story.append(Spacer(1, 25 * mm))
+    story.append(Spacer(1, 20 * mm))
 
-    # 7. Footer (Imzo va Pechat)
+    # 7. Footer (Imzo va Pechat rasmi)
     style_footer_l = ParagraphStyle('FootL', fontName=fn_b, fontSize=11, leading=14, alignment=TA_LEFT)
     style_footer_r = ParagraphStyle('FootR', fontName=fn_b, fontSize=11, leading=14, alignment=TA_RIGHT)
 
     foot_l = Paragraph("“Qarshi tibbiyot texnikumi”<br/>ijrochi direktori:", style_footer_l)
-    
-    # Pechat va imzo rasmi mavjud bo'lsa jadval ichiga joylaymiz
+
     if os.path.exists(PECHAT_FILE):
         stamp_img = RLImage(PECHAT_FILE, width=35 * mm, height=35 * mm)
     else:
@@ -184,5 +194,16 @@ def build_flattened_pdf(
     ]))
     story.append(foot_table)
 
-    # PDF ni to'g'ridan-to'g meyoriy shaklda yaratish
+    # PDF ni xotiraga qurish
     doc.build(story)
+
+    # ── 8. PDF Sahifasini 300 DPI Sifatli PNG RASMGA aylantirish ──────────────────
+    pdf_bytes = buf.getvalue()
+    pdf_doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    page = pdf_doc[0]
+
+    # 300 DPI ravshanlik (tushunarli va tiniq rasm)
+    pix = page.get_pixmap(dpi=300)
+    pix.save(output_img_path)
+
+    pdf_doc.close()

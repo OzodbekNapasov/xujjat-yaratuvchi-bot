@@ -1,6 +1,6 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
-#  Sizning asl .docx shabloningizni tahrirlaydi va yuboradi
+#  Hujjatni yuqori sifatli RASM (PNG) formatida yuboradi
 # ============================================================
 
 import os
@@ -15,9 +15,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 import httpx
 
-from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users, find_template_file
+from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users
 from services.state_storage import storage
-from services.docx_filler import fill_template
+from services.pdf_builder import build_document_image
 
 app = FastAPI()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -32,18 +32,17 @@ async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="H
         await client.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=15)
 
 
-async def send_document(chat_id: int, file_path: str, custom_filename: str, caption: str = "", reply_markup=None):
+async def send_image_document(chat_id: int, image_path: str, custom_filename: str, caption: str = "", reply_markup=None):
+    """Sifatli PNG rasmni Telegram orqali yuborish"""
     async with httpx.AsyncClient() as client:
-        with open(file_path, "rb") as f:
-            ext = os.path.splitext(file_path)[1].lower()
-            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/pdf"
+        with open(image_path, "rb") as f:
             data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"}
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
             await client.post(
                 f"{TELEGRAM_API}/sendDocument",
                 data=data,
-                files={"document": (custom_filename, f, mime)},
+                files={"document": (custom_filename, f, "image/png")},
                 timeout=60,
             )
 
@@ -142,39 +141,29 @@ async def handle_user_input(chat_id: int, user_id: int, text: str):
 
 async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     uid = uuid.uuid4().hex[:8]
-    filename = tpl.get("filename", "malumotnoma.docx")
-    template_docx = find_template_file(filename)
-    output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
+    output_png = os.path.join(TEMP_DIR, f"doc_{uid}.png")
 
-    if not os.path.exists(template_docx):
-        await send_message(
-            chat_id,
-            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`{filename}`).",
-            reply_markup={"remove_keyboard": True}
-        )
-        return
-
-    wait_resp = await _send_and_get_id(chat_id, "⏳ Sizning hujjat shabloningiz to'ldirilmoqda...")
+    wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat rasm shaklida tayyorlanmoqda...")
 
     try:
-        # Sizning asl Word faylingiz to'ldiriladi (barcha logotip, pechat, imzo va shriftlar 100% saqlanadi)
+        # Yuqori aniqlikdagi PNG rasm yaratish (Qalin, qiya matnlar va pechatlar bilan)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, fill_template, template_docx, output_docx, answers
+            None, build_document_image, output_png, tpl["name"], answers
         )
 
         fio = answers.get("FIO", "Talaba").strip()
-        custom_doc_name = f"{fio} ma'lumotnoma.docx"
+        custom_img_name = f"{fio} ma'lumotnoma.png"
 
         remove_kb = {"remove_keyboard": True}
-        await send_document(
+        await send_image_document(
             chat_id,
-            file_path=output_docx,
-            custom_filename=custom_doc_name,
+            image_path=output_png,
+            custom_filename=custom_img_name,
             caption=(
-                f"✅ <b>{custom_doc_name}</b> muvaffaqiyatli tahrirlandi!\n\n"
-                f"📄 Sizning shabloningiz bo'yicha tayyorlandi.\n"
-                f"Yangi hujjat uchun /start yuboring."
+                f"✅ <b>{custom_img_name}</b> tayyorlandi!\n\n"
+                f"🖼 Hujjat tiniq rasm shaklida yuborildi.\n"
+                f"Yangi hujjat yaratish uchun /start yuboring."
             ),
             reply_markup=remove_kb
         )
@@ -192,8 +181,8 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
         )
     finally:
         try:
-            if os.path.exists(output_docx):
-                os.remove(output_docx)
+            if os.path.exists(output_png):
+                os.remove(output_png)
         except Exception:
             pass
 

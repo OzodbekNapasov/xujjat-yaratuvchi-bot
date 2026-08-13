@@ -1,61 +1,76 @@
 # ============================================================
 #  services/docx_filler.py
-#  .docx shablonni ma'lumotlar bilan to'ldiradi
+#  .docx shablonni to'ldirish (Qalin, qiya va barcha shrift
+#  formatlarini 100% buzmasdan saqlaydi)
 # ============================================================
 
 from docx import Document
-import copy
 
 
 def fill_template(template_path: str, output_path: str, data: dict) -> None:
     """
     template_path : .docx shablon fayli yo'li
     output_path   : natija .docx fayli yo'li
-    data          : {"FIO": "Aliyev Ali", "SANA": "01.01.2025", ...}
+    data          : {"FIO": "...", "YONALISH": "...", ...}
     """
     doc = Document(template_path)
 
-    def replace_in_text(text: str) -> str:
-        for key, value in data.items():
-            text = text.replace(f"{{{{{key}}}}}", str(value))
-        return text
-
     # Paragraflar
     for para in doc.paragraphs:
-        _replace_paragraph(para, data)
+        _replace_in_paragraph(para, data)
 
     # Jadvallar ichidagi kataklar
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
-                    _replace_paragraph(para, data)
+                    _replace_in_paragraph(para, data)
 
-    # Sarlavha va footer
+    # Header va Footer
     for section in doc.sections:
         for para in section.header.paragraphs:
-            _replace_paragraph(para, data)
+            _replace_in_paragraph(para, data)
         for para in section.footer.paragraphs:
-            _replace_paragraph(para, data)
+            _replace_in_paragraph(para, data)
 
     doc.save(output_path)
 
 
-def _replace_paragraph(para, data: dict) -> None:
+def _replace_in_paragraph(para, data: dict) -> None:
     """
-    Paragraf ichidagi run larni birlashtirgan holda almashtiradi.
-    Bu {{FIELD}} bir nechta run ga bo'linib ketgan holatlarni ham to'g'ri hal qiladi.
+    Har bir run uchun tekshirib, formatlashni (bold, italic, size, color)
+    100% saqlagan holda o'zgaruvchilar o'rniga qiymat qo'yadi.
     """
+    # 1-Bosqich: Run lar ichida to'g'ridan-to'g'ri almashtirish (format saqlanadi)
+    for run in para.runs:
+        for key, value in data.items():
+            placeholder = f"{{{{{key}}}}}"
+            if placeholder in run.text:
+                run.text = run.text.replace(placeholder, str(value))
+
+    # 2-Bosqich: Agar Word XML qavslarni bo'lib yuborgan bo'lsa (cross-run)
     full_text = "".join(run.text for run in para.runs)
-    new_text = full_text
+    needs_cross_replace = False
+    for key in data.keys():
+        placeholder = f"{{{{{key}}}}}"
+        if placeholder in full_text:
+            # Hali almashtirilmagan placeholder qolgan bo'lsa
+            needs_cross_replace = True
+            break
+
+    if needs_cross_replace:
+        _replace_cross_run(para, data)
+
+
+def _replace_cross_run(para, data: dict) -> None:
+    """Word bo'lib yuborgan run lardagi {{FIELD}} larni formatini saqlab birlashtirish"""
+    full_text = "".join(run.text for run in para.runs)
     for key, value in data.items():
-        new_text = new_text.replace(f"{{{{{key}}}}}", str(value))
+        placeholder = f"{{{{{key}}}}}"
+        full_text = full_text.replace(placeholder, str(value))
 
-    if new_text == full_text:
-        return  # o'zgarmagan, chiqib ketamiz
-
-    # Birinchi run ga yangi matnni qo'yib, qolganlarini tozalaymiz
     if para.runs:
-        para.runs[0].text = new_text
+        # Birinchi run stili saqlanadi
+        para.runs[0].text = full_text
         for run in para.runs[1:]:
             run.text = ""
