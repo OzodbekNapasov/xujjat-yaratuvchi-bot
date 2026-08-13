@@ -1,5 +1,6 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
+#  Ko'p hujjatli menyu + Reply Keyboard tugmalari
 # ============================================================
 
 import os
@@ -26,9 +27,6 @@ async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="H
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
-    else:
-        # Standart tugmalarni olib tashlash (agar reply_markup berilmagan bo'lsa)
-        pass
 
     async with httpx.AsyncClient() as client:
         await client.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=15)
@@ -63,6 +61,8 @@ def make_reply_keyboard(button_rows, one_time=True):
     }
 
 
+# ── /start buyrug'i — Hujjatlar menyusi ─────────────────────────────────────
+
 async def handle_start(chat_id: int, user_id: int):
     allowed = load_allowed_users()
     if allowed and user_id not in allowed:
@@ -73,12 +73,29 @@ async def handle_start(chat_id: int, user_id: int):
         )
         return
 
-    tpl = TEMPLATES[0]
+    await storage.delete(user_id)
+
+    # Hujjatlar ro'yxatidan pastki tugmalarni yasaymiz
+    menu_buttons = [[tpl["name"]] for tpl in TEMPLATES]
+    kb = make_reply_keyboard(menu_buttons, one_time=True)
+
+    await send_message(
+        chat_id,
+        "📋 <b>Qaysi hujjatni tayyorlashni xohlaysiz?</b>\n\n"
+        "Quyidagi ro'yxatdan kerakli hujjatni tanlang 👇",
+        reply_markup=kb
+    )
+
+
+# ── Hujjat tanlanganda dialogni boshlash ───────────────────────────────────
+
+async def start_document_dialog(chat_id: int, user_id: int, tpl_index: int):
+    tpl = TEMPLATES[tpl_index]
     first_step = tpl["steps"][0]
 
     await storage.set(user_id, {
         "state": "answering",
-        "tpl_index": 0,
+        "tpl_index": tpl_index,
         "step": 0,
         "answers": {}
     })
@@ -86,18 +103,30 @@ async def handle_start(chat_id: int, user_id: int):
     kb = make_reply_keyboard(first_step.get("buttons"))
     await send_message(
         chat_id,
-        f"📋 <b>{tpl['name']}</b>\n\n"
+        f"✅ <b>{tpl['name']}</b> tanlandi.\n\n"
         f"<b>(1/{len(tpl['steps'])})</b> {first_step['question']}",
         reply_markup=kb
     )
 
 
-async def handle_answer(chat_id: int, user_id: int, text: str):
+# ── Foydalanuvchi xabarlarini qayta ishlash ─────────────────────────────────
+
+async def handle_user_input(chat_id: int, user_id: int, text: str):
     state_data = await storage.get(user_id)
+
+    # Agar hali hujjat tanlanmagan bo'lsa (yoki holat yo'q bo'lsa)
     if not state_data or state_data.get("state") != "answering":
+        # Kiritilgan matn shablon nomlaridan biriga mos keladimi tekshiramiz
+        for idx, tpl in enumerate(TEMPLATES):
+            if text.strip() == tpl["name"].strip():
+                await start_document_dialog(chat_id, user_id, idx)
+                return
+
+        # Mos kelmasa — menyuni qayta ko'rsatamiz
         await handle_start(chat_id, user_id)
         return
 
+    # Dialog davom etayotgan bo'lsa
     tpl_index = state_data["tpl_index"]
     step      = state_data["step"]
     answers   = state_data["answers"]
@@ -119,17 +148,18 @@ async def handle_answer(chat_id: int, user_id: int, text: str):
             reply_markup=kb
         )
     else:
-        # Barcha savollar tugadi — Word fayl yaratamiz
+        # Barcha savollar tugadi — Word faylni yaratamiz
         await storage.delete(user_id)
         await _generate_and_send(chat_id, tpl, answers)
 
+
+# ── Word faylni to'ldirish va yuborish ──────────────────────────────────────
 
 async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     uid = uuid.uuid4().hex[:8]
     template_docx = tpl["file"]
     output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
 
-    # Fayl mavjudligini qayta tekshirish
     if not os.path.exists(template_docx):
         alt_paths = [
             os.path.join(os.path.dirname(__file__), "..", "templates", "malumotnoma.docx"),
@@ -144,13 +174,12 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     if not os.path.exists(template_docx):
         await send_message(
             chat_id,
-            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`malumotnoma.docx`).\n"
-            f"Fayl yo'li: <code>{template_docx}</code>",
+            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`malumotnoma.docx`).",
             reply_markup={"remove_keyboard": True}
         )
         return
 
-    wait_resp = await _send_and_get_id(chat_id, "⏳ Shablon to'ldirilmoqda...")
+    wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat to'ldirilmoqda...")
 
     try:
         loop = asyncio.get_event_loop()
@@ -158,14 +187,12 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
             None, fill_template, template_docx, output_docx, answers
         )
 
-        fio = answers.get("FIO", "hujjat")
         remove_kb = {"remove_keyboard": True}
-
         await send_document(
             chat_id, output_docx,
             caption=(
-                f"✅ <b>{tpl['name']}</b> muvaffaqiyatli tahrirlandi!\n\n"
-                f"Yangi hujjat uchun /start yuboring."
+                f"✅ <b>{tpl['name']}</b> muvaffaqiyatli tahrirlandi va tayyorlandi!\n\n"
+                f"Yangi hujjat yaratish uchun /start yuboring."
             ),
             reply_markup=remove_kb
         )
@@ -232,7 +259,7 @@ async def webhook(request: Request):
                 reply_markup={"remove_keyboard": True}
             )
         elif text:
-            await handle_answer(chat_id, user_id, text)
+            await handle_user_input(chat_id, user_id, text)
 
     return Response(status_code=200)
 

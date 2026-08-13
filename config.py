@@ -25,20 +25,19 @@ def load_allowed_users() -> set[int]:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Vercel va Lokal uchun fayl yo'li tekshiruvi
 TEMPLATE_FILE = os.path.join(BASE_DIR, "templates", "malumotnoma.docx")
 if not os.path.exists(TEMPLATE_FILE):
     alt_path = os.path.join(os.getcwd(), "templates", "malumotnoma.docx")
     if os.path.exists(alt_path):
         TEMPLATE_FILE = alt_path
 
-# Bugungi sana (DD.MM.YYYY y. formatida)
 today_str = datetime.now().strftime("%d.%m.%Y y.")
 
+# Shablonlar ro'yxati (Kelajakda 2, 3-hujjatlarni ham osongina qo'shishingiz mumkin)
 TEMPLATES = [
     {
-        "id": "malumotnoma",
-        "name": "🎓 O'qishga qabul ma'lumotnomasi",
+        "id": "qabul_1_kurs",
+        "name": "🎓 1-kursga qabul ma'lumotnomasi",
         "file": TEMPLATE_FILE,
         "steps": [
             {
