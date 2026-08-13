@@ -1,6 +1,6 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
-#  Hujjatni yuqori sifatli RASM (PNG) formatida yuboradi
+#  Hujjatni o'ta tiniq PNG rasm shaklida yuboradi (Vercel mos)
 # ============================================================
 
 import os
@@ -17,7 +17,7 @@ import httpx
 
 from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users
 from services.state_storage import storage
-from services.pdf_builder import build_document_image
+from services.image_builder import build_document_image
 
 app = FastAPI()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -146,7 +146,7 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat rasm shaklida tayyorlanmoqda...")
 
     try:
-        # Yuqori aniqlikdagi PNG rasm yaratish (Qalin, qiya matnlar va pechatlar bilan)
+        # 300 DPI rasmni tezkor yaratish
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None, build_document_image, output_png, tpl["name"], answers
