@@ -1,6 +1,5 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
-#  Ko'p hujjatli menyu + Reply Keyboard tugmalari
 # ============================================================
 
 import os
@@ -15,7 +14,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 import httpx
 
-from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users
+from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users, find_template_file
 from services.state_storage import storage
 from services.docx_filler import fill_template
 
@@ -61,8 +60,6 @@ def make_reply_keyboard(button_rows, one_time=True):
     }
 
 
-# ── /start buyrug'i — Hujjatlar menyusi ─────────────────────────────────────
-
 async def handle_start(chat_id: int, user_id: int):
     allowed = load_allowed_users()
     if allowed and user_id not in allowed:
@@ -75,7 +72,6 @@ async def handle_start(chat_id: int, user_id: int):
 
     await storage.delete(user_id)
 
-    # Hujjatlar ro'yxatidan pastki tugmalarni yasaymiz
     menu_buttons = [[tpl["name"]] for tpl in TEMPLATES]
     kb = make_reply_keyboard(menu_buttons, one_time=True)
 
@@ -86,8 +82,6 @@ async def handle_start(chat_id: int, user_id: int):
         reply_markup=kb
     )
 
-
-# ── Hujjat tanlanganda dialogni boshlash ───────────────────────────────────
 
 async def start_document_dialog(chat_id: int, user_id: int, tpl_index: int):
     tpl = TEMPLATES[tpl_index]
@@ -109,31 +103,24 @@ async def start_document_dialog(chat_id: int, user_id: int, tpl_index: int):
     )
 
 
-# ── Foydalanuvchi xabarlarini qayta ishlash ─────────────────────────────────
-
 async def handle_user_input(chat_id: int, user_id: int, text: str):
     state_data = await storage.get(user_id)
 
-    # Agar hali hujjat tanlanmagan bo'lsa (yoki holat yo'q bo'lsa)
     if not state_data or state_data.get("state") != "answering":
-        # Kiritilgan matn shablon nomlaridan biriga mos keladimi tekshiramiz
         for idx, tpl in enumerate(TEMPLATES):
             if text.strip() == tpl["name"].strip():
                 await start_document_dialog(chat_id, user_id, idx)
                 return
 
-        # Mos kelmasa — menyuni qayta ko'rsatamiz
         await handle_start(chat_id, user_id)
         return
 
-    # Dialog davom etayotgan bo'lsa
     tpl_index = state_data["tpl_index"]
     step      = state_data["step"]
     answers   = state_data["answers"]
     tpl       = TEMPLATES[tpl_index]
     current_step_info = tpl["steps"][step]
 
-    # Javobni saqlash
     answers[current_step_info["field"]] = text.strip()
     step += 1
 
@@ -148,33 +135,20 @@ async def handle_user_input(chat_id: int, user_id: int, text: str):
             reply_markup=kb
         )
     else:
-        # Barcha savollar tugadi — Word faylni yaratamiz
         await storage.delete(user_id)
         await _generate_and_send(chat_id, tpl, answers)
 
 
-# ── Word faylni to'ldirish va yuborish ──────────────────────────────────────
-
 async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     uid = uuid.uuid4().hex[:8]
-    template_docx = tpl["file"]
+    filename = tpl.get("filename", "malumotnoma.docx")
+    template_docx = find_template_file(filename)
     output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
-
-    if not os.path.exists(template_docx):
-        alt_paths = [
-            os.path.join(os.path.dirname(__file__), "..", "templates", "malumotnoma.docx"),
-            os.path.join(os.getcwd(), "templates", "malumotnoma.docx"),
-            "/var/task/templates/malumotnoma.docx"
-        ]
-        for p in alt_paths:
-            if os.path.exists(p):
-                template_docx = p
-                break
 
     if not os.path.exists(template_docx):
         await send_message(
             chat_id,
-            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`malumotnoma.docx`).",
+            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`{filename}`).",
             reply_markup={"remove_keyboard": True}
         )
         return

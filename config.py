@@ -23,22 +23,40 @@ def load_allowed_users() -> set[int]:
     except Exception:
         return set()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Vercel va har qanday muhit uchun xavfsiz fayl izlash funksiyasi
+def find_template_file(filename="malumotnoma.docx"):
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(curr_dir, "templates", filename),
+        os.path.join(curr_dir, "..", "templates", filename),
+        os.path.join(os.getcwd(), "templates", filename),
+        os.path.join(os.getcwd(), filename),
+        f"/var/task/templates/{filename}",
+        f"/var/task/{filename}",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
 
-TEMPLATE_FILE = os.path.join(BASE_DIR, "templates", "malumotnoma.docx")
-if not os.path.exists(TEMPLATE_FILE):
-    alt_path = os.path.join(os.getcwd(), "templates", "malumotnoma.docx")
-    if os.path.exists(alt_path):
-        TEMPLATE_FILE = alt_path
+    # Agarda Vercel ichida boshqa joyda bo'lsa, qidirib topadi
+    search_root = "/var/task" if os.path.exists("/var/task") else os.getcwd()
+    for root, dirs, files in os.walk(search_root):
+        if filename in files:
+            return os.path.join(root, filename)
 
-today_str = datetime.now().strftime("%d.%m.%Y y.")
+    return os.path.join(curr_dir, "templates", filename)
 
-# Shablonlar ro'yxati (Kelajakda 2, 3-hujjatlarni ham osongina qo'shishingiz mumkin)
+TEMPLATE_FILE = find_template_file("malumotnoma.docx")
+
+# Bugungi sana: 13.08.2026 (y. siz, chunki docx hujjatingizda {{SANA}} y. deb yozilgan)
+today_str = datetime.now().strftime("%d.%m.%Y")
+
 TEMPLATES = [
     {
         "id": "qabul_1_kurs",
         "name": "🎓 1-kursga qabul ma'lumotnomasi",
         "file": TEMPLATE_FILE,
+        "filename": "malumotnoma.docx",
         "steps": [
             {
                 "field": "FIO",
@@ -72,5 +90,5 @@ TEMPLATES = [
     }
 ]
 
-TEMP_DIR = "/tmp" if os.path.exists("/tmp") else os.path.join(BASE_DIR, "temp")
+TEMP_DIR = "/tmp" if os.path.exists("/tmp") else os.path.join(os.path.dirname(__file__), "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
