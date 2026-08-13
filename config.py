@@ -1,5 +1,5 @@
 # ============================================================
-#  config.py — Qarshi Tibbiyot Texnikumi Sozlamalari
+#  config.py — DOCX Shablonni tahrirlash sozlamalari
 # ============================================================
 
 import os
@@ -22,11 +22,14 @@ def load_allowed_users() -> set[int]:
     except Exception:
         return set()
 
+BASE_DIR = os.path.dirname(__file__)
+
 # ── Shablonlar konfiguratsiyasi ─────────────────────────────────────────────
 TEMPLATES = [
     {
-        "id": "qabul_malumotnoma",
+        "id": "malumotnoma",
         "name": "🎓 O'qishga qabul ma'lumotnomasi",
+        "file": os.path.join(BASE_DIR, "templates", "malumotnoma.docx"),
         "questions": [
             "👤 Talabaning F.I.O ni kiriting (masalan: Napasov Ozodbek Zafar o’g’li):",
             "📚 Yo'nalish nomini kiriting (masalan: Hamshiralik ishi):",
@@ -34,18 +37,8 @@ TEMPLATES = [
             "📆 Berilgan sanani kiriting (masalan: 12.07.2026 y.):",
         ],
         "fields": ["FIO", "YONALISH", "OQUV_YILI", "SANA"],
-        "stamp": {
-            "pechat": {"x_mm": 130, "y_mm": 220, "w_mm": 45, "h_mm": 45},
-            "imzo":   {"x_mm": 140, "y_mm": 235, "w_mm": 45, "h_mm": 20},
-        },
     }
 ]
-
-BASE_DIR    = os.path.dirname(__file__)
-LOGO_FILE   = os.path.join(BASE_DIR, "templates", "stamps", "logo.png")
-PECHAT_FILE = os.path.join(BASE_DIR, "templates", "stamps", "pechat.png")
-IMZO_FILE   = os.path.join(BASE_DIR, "templates", "stamps", "imzo.png")
-FONT_FILE   = os.path.join(BASE_DIR, "templates", "fonts", "FreeSans.ttf")
 
 TEMP_DIR = "/tmp" if os.path.exists("/tmp") else os.path.join(BASE_DIR, "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)

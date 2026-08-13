@@ -1,6 +1,6 @@
 # ============================================================
-#  api/webhook.py — Vercel Serverless Entry Point
-#  Telegram webhook xabarlarini qabul qiladi va qayta ishlaydi
+#  api/webhook.py — Vercel Serverless Webhook Handler
+#  Sizning .docx shabloningizni tahrirlaydi va yuboradi
 # ============================================================
 
 import os
@@ -9,23 +9,19 @@ import json
 import uuid
 import asyncio
 
-# Loyiha root ni path ga qo'shamiz
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-
 import httpx
+
 from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users
 from services.state_storage import storage
-from services.pdf_builder import build_pdf
+from services.docx_filler import fill_template
 
 app = FastAPI()
-
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-
-# ── Telegram API yordamchi funksiyalari ───────────────────────────────────────
 
 async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
@@ -38,10 +34,12 @@ async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="H
 async def send_document(chat_id: int, file_path: str, caption: str = ""):
     async with httpx.AsyncClient() as client:
         with open(file_path, "rb") as f:
+            ext = os.path.splitext(file_path)[1].lower()
+            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/pdf"
             await client.post(
                 f"{TELEGRAM_API}/sendDocument",
                 data={"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"},
-                files={"document": (os.path.basename(file_path), f, "application/pdf")},
+                files={"document": (os.path.basename(file_path), f, mime)},
                 timeout=60,
             )
 
@@ -64,8 +62,6 @@ async def edit_message_reply_markup(chat_id: int, message_id: int):
         )
 
 
-# ── Shablon tanlash menyusi ───────────────────────────────────────────────────
-
 def _build_template_keyboard():
     buttons = [
         [{"text": tpl["name"], "callback_data": f"tpl:{i}"}]
@@ -73,8 +69,6 @@ def _build_template_keyboard():
     ]
     return {"inline_keyboard": buttons}
 
-
-# ── /start ────────────────────────────────────────────────────────────────────
 
 async def handle_start(chat_id: int, user_id: int):
     allowed = load_allowed_users()
@@ -94,8 +88,6 @@ async def handle_start(chat_id: int, user_id: int):
         reply_markup=_build_template_keyboard()
     )
 
-
-# ── Shablon tanlanganda ───────────────────────────────────────────────────────
 
 async def handle_template_select(chat_id: int, user_id: int, tpl_index: int,
                                   message_id: int, callback_id: str):
@@ -124,8 +116,6 @@ async def handle_template_select(chat_id: int, user_id: int, tpl_index: int,
     )
 
 
-# ── Foydalanuvchi javobini qayta ishlash ─────────────────────────────────────
-
 async def handle_answer(chat_id: int, user_id: int, text: str):
     state_data = await storage.get(user_id)
     if not state_data or state_data.get("state") != "answering":
@@ -137,7 +127,6 @@ async def handle_answer(chat_id: int, user_id: int, text: str):
     answers   = state_data["answers"]
     tpl       = TEMPLATES[tpl_index]
 
-    # Javobni saqlaymiz
     answers[tpl["fields"][step]] = text.strip()
     step += 1
 
@@ -148,35 +137,33 @@ async def handle_answer(chat_id: int, user_id: int, text: str):
             f"<b>({step + 1}/{len(tpl['questions'])})</b> {tpl['questions'][step]}"
         )
     else:
-        # Barcha savollar tugadi
         await storage.delete(user_id)
         await _generate_and_send(chat_id, tpl, answers)
 
 
-# ── PDF yaratish va yuborish ──────────────────────────────────────────────────
-
 async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
-    uid       = uuid.uuid4().hex[:8]
-    pdf_path  = os.path.join(TEMP_DIR, f"doc_{uid}.pdf")
+    uid = uuid.uuid4().hex[:8]
+    template_docx = tpl["file"]
+    output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
 
-    wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat tayyorlanmoqda...")
+    wait_resp = await _send_and_get_id(chat_id, "⏳ Shablon to'ldirilmoqda...")
 
     try:
+        # 1. .docx Shablonni to'ldirish
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, build_pdf, pdf_path, tpl["name"], answers, tpl.get("stamp", {})
+            None, fill_template, template_docx, output_docx, answers
         )
 
         fio = answers.get("FIO", "hujjat")
         await send_document(
-            chat_id, pdf_path,
+            chat_id, output_docx,
             caption=(
-                f"✅ <b>{tpl['name']}</b> tayyor!\n"
+                f"✅ <b>{tpl['name']}</b> tahrirlandi va tayyorlandi!\n"
                 f"Yangi hujjat uchun /start"
             )
         )
 
-        # "tayyorlanmoqda" xabarini o'chiramiz
         if wait_resp:
             await _delete_message(chat_id, wait_resp)
 
@@ -185,12 +172,12 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
             await _delete_message(chat_id, wait_resp)
         await send_message(
             chat_id,
-            f"❌ Xatolik:\n<code>{e}</code>\n\nQayta urinib ko'ring yoki /start"
+            f"❌ Xatolik yuz berdi:\n<code>{e}</code>\n\nFayl mavjudligini va /start ni tekshiring."
         )
     finally:
         try:
-            if os.path.exists(pdf_path):
-                os.remove(pdf_path)
+            if os.path.exists(output_docx):
+                os.remove(output_docx)
         except Exception:
             pass
 
@@ -215,8 +202,6 @@ async def _delete_message(chat_id: int, message_id: int):
         )
 
 
-# ── Webhook endpoint ──────────────────────────────────────────────────────────
-
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
@@ -224,7 +209,6 @@ async def webhook(request: Request):
     except Exception:
         return Response(status_code=200)
 
-    # Callback query (tugma bosildi)
     if "callback_query" in update:
         cq       = update["callback_query"]
         user_id  = cq["from"]["id"]
@@ -240,7 +224,6 @@ async def webhook(request: Request):
             await answer_callback(cq_id)
         return Response(status_code=200)
 
-    # Oddiy xabar
     if "message" in update:
         msg     = update["message"]
         chat_id = msg["chat"]["id"]
@@ -258,14 +241,8 @@ async def webhook(request: Request):
     return Response(status_code=200)
 
 
-# ── Webhook o'rnatish endpointi ───────────────────────────────────────────────
-
 @app.get("/")
 async def set_webhook():
-    """
-    Brauzerda https://your-app.vercel.app/ ni ochsangiz,
-    webhook avtomatik o'rnatiladi.
-    """
     if not WEBHOOK_URL or not BOT_TOKEN:
         return JSONResponse({"error": "BOT_TOKEN yoki WEBHOOK_HOST sozlanmagan"})
 
@@ -284,7 +261,6 @@ async def set_webhook():
     })
 
 
-# ── Lokal ishga tushirish (test uchun) ────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
