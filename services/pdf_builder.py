@@ -1,13 +1,10 @@
 # ============================================================
 #  services/pdf_builder.py
-#  Hujjatni PDF shaklida hosil qiladi va 300 DPI rasmgacha
-#  tekislaydi (rasterize/flatten) — Pechat va imzo sotilib qolmaydi
+#  ReportLab yordamida to'liq va yengil PDF yaratish (Vercel-friendly)
 # ============================================================
 
 import os
 import io
-import pymupdf  # PyMuPDF
-from PIL import Image
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -53,9 +50,8 @@ def build_flattened_pdf(
     fn = _font(bold=False)
     fn_b = _font(bold=True)
 
-    buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        buf,
+        output_pdf_path,
         pagesize=A4,
         leftMargin=20 * mm,
         rightMargin=20 * mm,
@@ -164,16 +160,23 @@ def build_flattened_pdf(
     # 6. Note
     style_note = ParagraphStyle('NoteText', fontName=fn, fontSize=10.5, leading=15, alignment=TA_CENTER)
     story.append(Paragraph("<i>Ma’lumotnoma so‘ralgan joyga taqdim etish uchun berildi</i>", style_note))
-    story.append(Spacer(1, 20 * mm))
+    story.append(Spacer(1, 25 * mm))
 
     # 7. Footer (Imzo va Pechat)
     style_footer_l = ParagraphStyle('FootL', fontName=fn_b, fontSize=11, leading=14, alignment=TA_LEFT)
     style_footer_r = ParagraphStyle('FootR', fontName=fn_b, fontSize=11, leading=14, alignment=TA_RIGHT)
 
     foot_l = Paragraph("“Qarshi tibbiyot texnikumi”<br/>ijrochi direktori:", style_footer_l)
+    
+    # Pechat va imzo rasmi mavjud bo'lsa jadval ichiga joylaymiz
+    if os.path.exists(PECHAT_FILE):
+        stamp_img = RLImage(PECHAT_FILE, width=35 * mm, height=35 * mm)
+    else:
+        stamp_img = Paragraph("", style_footer_r)
+
     foot_r = Paragraph("Sh.Raxmonov", style_footer_r)
 
-    foot_table = Table([[foot_l, foot_r]], colWidths=[100 * mm, 70 * mm])
+    foot_table = Table([[foot_l, stamp_img, foot_r]], colWidths=[80 * mm, 40 * mm, 50 * mm])
     foot_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -181,25 +184,5 @@ def build_flattened_pdf(
     ]))
     story.append(foot_table)
 
-    # Clean PDF hosil qilish
+    # PDF ni to'g'ridan-to'g meyoriy shaklda yaratish
     doc.build(story)
-
-    raw_pdf_bytes = buf.getvalue()
-
-    # ── 8. RASTERIZE & FLATTEN (PDF sahifasini 300 DPI rasmga aylantirish) ──────
-    # PyMuPDF orqali PDF ni rasmga o'tkazamiz va yangi PDF ga rasm shaklida joylaymiz
-    doc_raw = pymupdf.open(stream=raw_pdf_bytes, filetype="pdf")
-    doc_flat = pymupdf.open()
-
-    for page_num in range(len(doc_raw)):
-        page = doc_raw[page_num]
-        # 300 DPI rasmgacha oshiramiz (haqiqiy skaner qilingan sifat)
-        pix = page.get_pixmap(dpi=300)
-
-        # Yangi A4 sahifa
-        new_page = doc_flat.new_page(width=page.rect.width, height=page.rect.height)
-        new_page.insert_image(new_page.rect, stream=pix.tobytes("png"))
-
-    doc_flat.save(output_pdf_path, deflate=True)
-    doc_flat.close()
-    doc_raw.close()
