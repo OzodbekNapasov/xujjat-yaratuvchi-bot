@@ -1,0 +1,18 @@
+# Maxfiy fayllar
+.env
+*.pyc
+__pycache__/
+.vercel/
+
+# Vaqtinchalik fayllar
+temp/
+*.pdf
+*.docx
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

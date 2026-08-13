@@ -1,0 +1,7 @@
+# Ruxsat etilgan foydalanuvchilar (Telegram user_id lar)
+# Har bir ID ni alohida qatorga yozing
+# Telegram ID ni bilmasangiz: @userinfobot ga /start yuboring
+
+# Misol:
+# 123456789
+# 987654321
