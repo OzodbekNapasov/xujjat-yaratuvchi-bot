@@ -4,15 +4,12 @@
 __pycache__/
 .vercel/
 
-# Vaqtinchalik fayllar
+# Vaqtinchalik fayllar papkasi
 temp/
 *.pdf
-*.docx
 
-# IDE
+# IDE va OS
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
