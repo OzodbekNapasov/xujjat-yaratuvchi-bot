@@ -25,7 +25,11 @@ def load_allowed_users() -> set[int]:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Fast, non-blocking deterministic template path lookup
+LOGO_FILE   = os.path.join(BASE_DIR, "templates", "stamps", "logo.png")
+PECHAT_FILE = os.path.join(BASE_DIR, "templates", "stamps", "pechat.png")
+IMZO_FILE   = os.path.join(BASE_DIR, "templates", "stamps", "imzo.png")
+FONT_FILE   = os.path.join(BASE_DIR, "templates", "fonts", "FreeSans.ttf")
+
 def find_template_file(filename="malumotnoma.docx"):
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
@@ -43,7 +47,6 @@ def find_template_file(filename="malumotnoma.docx"):
 
 TEMPLATE_FILE = find_template_file("malumotnoma.docx")
 
-# Bugungi sana: 13.08.2026 (y. siz, chunki docx hujjatingizda {{SANA}} y. deb yozilgan)
 today_str = datetime.now().strftime("%d.%m.%Y")
 
 TEMPLATES = [
