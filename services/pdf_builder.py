@@ -1,29 +1,26 @@
 # ============================================================
 #  services/pdf_builder.py
-#  reportlab yordamida to'g'ridan-to'g'ri PDF yaratish
-#  + PyMuPDF bilan pechat/imzo qo'shish
-#  (LibreOffice kerak emas — Vercel da ishlaydi!)
+#  Qarshi Tibbiyot Texnikumi Hujjat Generator (ReportLab + PyMuPDF)
 # ============================================================
 
 import os
 import io
+import tempfile
 import fitz  # PyMuPDF
 from PIL import Image
-import tempfile
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
+from reportlab.lib import colors
 
-from config import PECHAT_FILE, IMZO_FILE, FONT_FILE
+from config import LOGO_FILE, PECHAT_FILE, IMZO_FILE, FONT_FILE
 
-
-# ── Shrift ro'yxatdan o'tkazish (kirill/lotin uchun) ─────────────────────────
 _FONT_REGISTERED = False
 
 def _register_font():
@@ -33,17 +30,17 @@ def _register_font():
     try:
         if os.path.exists(FONT_FILE):
             pdfmetrics.registerFont(TTFont("FreeSans", FONT_FILE))
+            pdfmetrics.registerFont(TTFont("FreeSans-Bold", FONT_FILE)) # oddiy va bold
             _FONT_REGISTERED = True
     except Exception:
-        pass  # Standart shrift ishlatiladi
+        pass
 
-
-def _font():
+def _font(bold=False):
     _register_font()
-    return "FreeSans" if _FONT_REGISTERED else "Helvetica"
+    if _FONT_REGISTERED:
+        return "FreeSans-Bold" if bold else "FreeSans"
+    return "Helvetica-Bold" if bold else "Helvetica"
 
-
-# ── Asosiy PDF yaratish funksiyasi ────────────────────────────────────────────
 
 def build_pdf(
     output_path: str,
@@ -51,116 +48,177 @@ def build_pdf(
     data: dict,
     stamp_config: dict,
 ) -> None:
-    """
-    data misoli: {"FIO": "Aliyev Ali", "SANA": "01.01.2025", ...}
-    """
     _register_font()
-    font = _font()
+    fn = _font(bold=False)
+    fn_b = _font(bold=True)
 
     buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4  # 595 x 842 pt
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+    )
 
-    # ── Sahifa chegarasi ─────────────────────────────────────────────────────
-    margin_left  = 25 * mm
-    margin_right = 25 * mm
-    margin_top   = 25 * mm
-    text_width   = w - margin_left - margin_right
+    story = []
 
-    y = h - margin_top  # yuqoridan boshlaymiz
+    # ── 1. Tepa qism (Header Table: Uzbek Text | Logo | Russian Text) ─────────
+    style_hdr_left = ParagraphStyle(
+        'HdrLeft',
+        fontName=fn_b,
+        fontSize=8.5,
+        leading=11,
+        alignment=TA_CENTER,
+        textColor=colors.black
+    )
+    style_hdr_right = ParagraphStyle(
+        'HdrRight',
+        fontName=fn_b,
+        fontSize=8.5,
+        leading=11,
+        alignment=TA_CENTER,
+        textColor=colors.black
+    )
 
-    def write_line(text, font_size=12, bold=False, align="left", gap_after=6):
-        nonlocal y
-        fn = font
-        c.setFont(fn, font_size)
-        if align == "center":
-            c.drawCentredString(w / 2, y, text)
-        elif align == "right":
-            c.drawRightString(w - margin_right, y, text)
-        else:
-            c.drawString(margin_left, y, text)
-        y -= (font_size + gap_after)
+    text_left = (
+        "O’ZBEKISTON RESPUBLIKASI<br/>"
+        "QASHQADARYO VILOYATI<br/>"
+        "“QARSHI TIBBIYOT TEXNIKUMI”<br/>"
+        "NODAVLAT TA’LIM MUASSASASI"
+    )
 
-    def write_gap(pt=10):
-        nonlocal y
-        y -= pt
+    text_right = (
+        "РЕСПУБЛИКА УЗБЕКИСТАН<br/>"
+        "КАШКАДАРЬИНСКАЯ ОБЛАСТЬ<br/>"
+        "НЕГОСУДАРСТВЕННОЕ ОБРАЗОВАТЕЛЬНОЕ УЧРЕЖДЕНИЕ<br/>"
+        "«КАРШИНСКИЙ МЕДИЦИНСКИЙ ТЕХНИКУМ»"
+    )
 
-    def write_field(label, value, font_size=11):
-        nonlocal y
-        c.setFont(font, font_size)
-        c.drawString(margin_left, y, f"{label}: {value}")
-        # Tag chizig'i (underline)
-        line_x = margin_left + c.stringWidth(f"{label}: ", font, font_size)
-        c.line(line_x, y - 2, w - margin_right, y - 2)
-        y -= (font_size + 8)
+    cell_left = Paragraph(text_left, style_hdr_left)
+    cell_right = Paragraph(text_right, style_hdr_right)
 
-    # ── Sarlavha ─────────────────────────────────────────────────────────────
-    c.setFont(font, 14)
-    c.drawCentredString(w / 2, y, template_name.replace("📄 ", ""))
-    y -= 20
+    if os.path.exists(LOGO_FILE):
+        logo_img = RLImage(LOGO_FILE, width=28 * mm, height=28 * mm)
+    else:
+        logo_img = Paragraph("<b>LOGO</b>", style_hdr_left)
 
-    c.line(margin_left, y, w - margin_right, y)
-    y -= 15
+    header_table = Table(
+        [[cell_left, logo_img, cell_right]],
+        colWidths=[70 * mm, 30 * mm, 70 * mm]
+    )
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.gray), # ramka chegarasi
+        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.gray),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+    ]))
 
-    # ── Ma'lumotlar ───────────────────────────────────────────────────────────
-    field_labels = {
-        "FIO":          "F.I.O",
-        "PASSPORT":     "Passport",
-        "TUGILGAN_SANA":"Tug'ilgan sana",
-        "MANZIL":       "Manzil",
-        "TELEFON":      "Telefon",
-        "TASHKILOT":    "Tashkilot",
-        "SANA":         "Sana",
-        "MAZMUN":       "Murojaat mazmuni",
-    }
+    story.append(header_table)
+    story.append(Spacer(1, 4 * mm))
 
-    for field, value in data.items():
-        label = field_labels.get(field, field)
-        if field == "MAZMUN" and len(value) > 60:
-            # Uzun matn uchun ko'p satr
-            c.setFont(font, 11)
-            c.drawString(margin_left, y, f"{label}:")
-            y -= 14
-            # Matnni qatorlarga bo'lish
-            words = value.split()
-            line, lines = "", []
-            for word in words:
-                test = f"{line} {word}".strip()
-                if c.stringWidth(test, font, 10) < text_width:
-                    line = test
-                else:
-                    lines.append(line)
-                    line = word
-            if line:
-                lines.append(line)
-            c.setFont(font, 10)
-            for ln in lines:
-                c.drawString(margin_left + 10, y, ln)
-                y -= 13
-            y -= 5
-        else:
-            write_field(label, value)
+    # ── 2. Gorizontal chiziq ───────────────────────────────────────────────
+    # Qora qalin chiziq
+    divider = Table([['']], colWidths=[170 * mm], rowHeights=[1.5])
+    divider.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.black),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(divider)
+    story.append(Spacer(1, 3 * mm))
 
-    # ── Imzo joyi ─────────────────────────────────────────────────────────────
-    write_gap(20)
-    c.setFont(font, 10)
-    sign_y = 30 * mm  # sahifaning pastidan 30mm yuqorida
-    c.drawString(margin_left, sign_y + 15, "Mas'ul shaxs:  ___________________")
-    c.drawString(margin_left + 100*mm, sign_y + 15, "M.O.")
+    # ── 3. Shahar va Sana qatori ─────────────────────────────────────────────
+    style_meta = ParagraphStyle('Meta', fontName=fn, fontSize=11, leading=14)
+    meta_left = Paragraph("Qarshi shahri", style_meta)
+    meta_right = Paragraph(f"{data.get('SANA', '12.07.2026 y.')}", ParagraphStyle('MetaR', parent=style_meta, alignment=TA_RIGHT))
 
-    c.save()
+    meta_table = Table([[meta_left, meta_right]], colWidths=[85 * mm, 85 * mm])
+    meta_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(meta_table)
+    story.append(Spacer(1, 15 * mm))
 
-    # ── Pechat va imzoni qo'shish ─────────────────────────────────────────────
+    # ── 4. MA'LUMOTNOMA Sarlavhasi ──────────────────────────────────────────
+    style_title = ParagraphStyle(
+        'Title',
+        fontName=fn_b,
+        fontSize=15,
+        leading=18,
+        alignment=TA_CENTER
+    )
+    story.append(Paragraph("MA’LUMOTNOMA", style_title))
+    story.append(Spacer(1, 12 * mm))
+
+    # ── 5. Asosiy Matn ───────────────────────────────────────────────────────
+    fio = data.get('FIO', 'Napasov Ozodbek Zafar o’g’li')
+    yonalish = data.get('YONALISH', 'Hamshiralik ishi')
+    oquv_yili = data.get('OQUV_YILI', '2026/2027')
+    boshlash_yili = oquv_yili.split('/')[0] if '/' in oquv_yili else '2026'
+
+    style_body = ParagraphStyle(
+        'BodyText',
+        fontName=fn,
+        fontSize=12,
+        leading=22,
+        alignment=TA_JUSTIFY,
+        firstLineIndent=15 * mm
+    )
+
+    body_html = (
+        f"Ushbu ma’lumotnoma shuni tasdiqlaydiki, haqiqatdan ham "
+        f"<b>{fio}</b> {oquv_yili}-o‘quv yilida <b>{yonalish}</b> "
+        f"yo‘nalishiga shartnoma asosida o‘qishga qabul qilindi. Talaba o‘qishni {boshlash_yili}-yil "
+        f"sentyabr oyidan boshlaydi."
+    )
+    story.append(Paragraph(body_html, style_body))
+    story.append(Spacer(1, 8 * mm))
+
+    # ── 6. Ma'lumotnoma berilish maqsadi ─────────────────────────────────────
+    style_note = ParagraphStyle(
+        'NoteText',
+        fontName=fn,
+        fontSize=11,
+        leading=15,
+        alignment=TA_CENTER
+    )
+    story.append(Paragraph("<i>Ma’lumotnoma so‘ralgan joyga taqdim etish uchun berildi</i>", style_note))
+    story.append(Spacer(1, 25 * mm))
+
+    # ── 7. Imzo qismi (Footer Table) ─────────────────────────────────────────
+    style_footer_l = ParagraphStyle('FootL', fontName=fn_b, fontSize=11, leading=14, alignment=TA_LEFT)
+    style_footer_r = ParagraphStyle('FootR', fontName=fn_b, fontSize=11, leading=14, alignment=TA_RIGHT)
+
+    foot_l = Paragraph("“Qarshi tibbiyot texnikumi”<br/>ijrochi direktori:", style_footer_l)
+    foot_r = Paragraph("<u>Sh.Raxmonov</u>", style_footer_r)
+
+    foot_table = Table([[foot_l, foot_r]], colWidths=[100 * mm, 70 * mm])
+    foot_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
+    ]))
+    story.append(foot_table)
+
+    # Qurish
+    doc.build(story)
+
+    # ── 8. Pechat va imzo qo'yish (PyMuPDF) ────────────────────────────────
     pdf_bytes = buf.getvalue()
     _add_stamps(pdf_bytes, output_path, stamp_config)
 
 
 def _add_stamps(pdf_bytes: bytes, output_path: str, stamp_config: dict) -> None:
-    """PyMuPDF bilan pechat va imzoni PDF ga qo'shadi"""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[-1]  # oxirgi sahifa
+    page = doc[-1]
 
-    PT = 2.8346  # 1 mm = 2.8346 pt
+    PT = 2.8346
 
     def place_img(img_path: str, cfg: dict):
         if not img_path or not os.path.exists(img_path):
