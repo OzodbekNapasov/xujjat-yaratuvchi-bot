@@ -1,9 +1,10 @@
 # ============================================================
-#  config.py — DOCX Shablonni tahrirlash sozlamalari
+#  config.py — Shablonlar va tugmalar sozlamalari
 # ============================================================
 
 import os
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,21 +23,53 @@ def load_allowed_users() -> set[int]:
     except Exception:
         return set()
 
-BASE_DIR = os.path.dirname(__file__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ── Shablonlar konfiguratsiyasi ─────────────────────────────────────────────
+# Vercel va Lokal uchun fayl yo'li tekshiruvi
+TEMPLATE_FILE = os.path.join(BASE_DIR, "templates", "malumotnoma.docx")
+if not os.path.exists(TEMPLATE_FILE):
+    alt_path = os.path.join(os.getcwd(), "templates", "malumotnoma.docx")
+    if os.path.exists(alt_path):
+        TEMPLATE_FILE = alt_path
+
+# Bugungi sana (DD.MM.YYYY y. formatida)
+today_str = datetime.now().strftime("%d.%m.%Y y.")
+
 TEMPLATES = [
     {
         "id": "malumotnoma",
         "name": "🎓 O'qishga qabul ma'lumotnomasi",
-        "file": os.path.join(BASE_DIR, "templates", "malumotnoma.docx"),
-        "questions": [
-            "👤 Talabaning F.I.O ni kiriting (masalan: Napasov Ozodbek Zafar o’g’li):",
-            "📚 Yo'nalish nomini kiriting (masalan: Hamshiralik ishi):",
-            "📅 O'quv yilini kiriting (masalan: 2026/2027):",
-            "📆 Berilgan sanani kiriting (masalan: 12.07.2026 y.):",
-        ],
-        "fields": ["FIO", "YONALISH", "OQUV_YILI", "SANA"],
+        "file": TEMPLATE_FILE,
+        "steps": [
+            {
+                "field": "FIO",
+                "question": "👤 Talabaning F.I.O ni kiriting:\n<i>(Masalan: Napasov Ozodbek Zafar o’g’li)</i>",
+                "buttons": None
+            },
+            {
+                "field": "YONALISH",
+                "question": "📚 Yo'nalishni tanlang yoki kiriting:",
+                "buttons": [
+                    ["Hamshiralik ishi"],
+                    ["Feldsherlik ishi"],
+                    ["Farmatsiya ishi"]
+                ]
+            },
+            {
+                "field": "OQUV_YILI",
+                "question": "📅 O'quv yilini tanlang yoki kiriting:",
+                "buttons": [
+                    ["2026/2027", "2025/2026"]
+                ]
+            },
+            {
+                "field": "SANA",
+                "question": "📆 Berilgan sanani tanlang yoki qo'lda kiriting:",
+                "buttons": [
+                    [today_str]
+                ]
+            }
+        ]
     }
 ]
 

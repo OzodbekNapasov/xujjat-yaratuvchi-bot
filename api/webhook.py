@@ -1,6 +1,5 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
-#  Sizning .docx shabloningizni tahrirlaydi va yuboradi
 # ============================================================
 
 import os
@@ -27,47 +26,41 @@ async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="H
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
+    else:
+        # Standart tugmalarni olib tashlash (agar reply_markup berilmagan bo'lsa)
+        pass
+
     async with httpx.AsyncClient() as client:
         await client.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=15)
 
 
-async def send_document(chat_id: int, file_path: str, caption: str = ""):
+async def send_document(chat_id: int, file_path: str, caption: str = "", reply_markup=None):
     async with httpx.AsyncClient() as client:
         with open(file_path, "rb") as f:
             ext = os.path.splitext(file_path)[1].lower()
             mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/pdf"
+            data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"}
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
             await client.post(
                 f"{TELEGRAM_API}/sendDocument",
-                data={"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"},
+                data=data,
                 files={"document": (os.path.basename(file_path), f, mime)},
                 timeout=60,
             )
 
 
-async def answer_callback(callback_query_id: str, text: str = ""):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{TELEGRAM_API}/answerCallbackQuery",
-            json={"callback_query_id": callback_query_id, "text": text},
-            timeout=10,
-        )
-
-
-async def edit_message_reply_markup(chat_id: int, message_id: int):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{TELEGRAM_API}/editMessageReplyMarkup",
-            json={"chat_id": chat_id, "message_id": message_id, "reply_markup": "{}"},
-            timeout=10,
-        )
-
-
-def _build_template_keyboard():
-    buttons = [
-        [{"text": tpl["name"], "callback_data": f"tpl:{i}"}]
-        for i, tpl in enumerate(TEMPLATES)
-    ]
-    return {"inline_keyboard": buttons}
+def make_reply_keyboard(button_rows, one_time=True):
+    if not button_rows:
+        return {"remove_keyboard": True}
+    keyboard = []
+    for row in button_rows:
+        keyboard.append([{"text": btn} for btn in row])
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": one_time
+    }
 
 
 async def handle_start(chat_id: int, user_id: int):
@@ -79,64 +72,54 @@ async def handle_start(chat_id: int, user_id: int):
             "Murojaat uchun admin bilan bog'laning."
         )
         return
-    await storage.delete(user_id)
-    await send_message(
-        chat_id,
-        "📋 <b>Xush kelibsiz!</b>\n\n"
-        "Qaysi hujjatni tayyorlashni xohlaysiz?\n"
-        "Quyidagi ro'yxatdan birini tanlang 👇",
-        reply_markup=_build_template_keyboard()
-    )
 
+    tpl = TEMPLATES[0]
+    first_step = tpl["steps"][0]
 
-async def handle_template_select(chat_id: int, user_id: int, tpl_index: int,
-                                  message_id: int, callback_id: str):
-    allowed = load_allowed_users()
-    if allowed and user_id not in allowed:
-        await answer_callback(callback_id, "⛔ Ruxsat yo'q")
-        return
-
-    tpl = TEMPLATES[tpl_index]
     await storage.set(user_id, {
         "state": "answering",
-        "tpl_index": tpl_index,
+        "tpl_index": 0,
         "step": 0,
         "answers": {}
     })
 
-    await answer_callback(callback_id)
-    await edit_message_reply_markup(chat_id, message_id)
+    kb = make_reply_keyboard(first_step.get("buttons"))
     await send_message(
         chat_id,
-        f"✅ <b>{tpl['name']}</b> tanlandi.\n\n"
-        f"Savollarga navbat bilan javob bering.\n"
-        f"Bekor qilish: /cancel\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>(1/{len(tpl['questions'])})</b> {tpl['questions'][0]}"
+        f"📋 <b>{tpl['name']}</b>\n\n"
+        f"<b>(1/{len(tpl['steps'])})</b> {first_step['question']}",
+        reply_markup=kb
     )
 
 
 async def handle_answer(chat_id: int, user_id: int, text: str):
     state_data = await storage.get(user_id)
     if not state_data or state_data.get("state") != "answering":
-        await send_message(chat_id, "❓ Hujjat tayyorlash uchun /start buyrug'ini yuboring.")
+        await handle_start(chat_id, user_id)
         return
 
     tpl_index = state_data["tpl_index"]
     step      = state_data["step"]
     answers   = state_data["answers"]
     tpl       = TEMPLATES[tpl_index]
+    current_step_info = tpl["steps"][step]
 
-    answers[tpl["fields"][step]] = text.strip()
+    # Javobni saqlash
+    answers[current_step_info["field"]] = text.strip()
     step += 1
 
-    if step < len(tpl["questions"]):
+    if step < len(tpl["steps"]):
+        next_step_info = tpl["steps"][step]
         await storage.set(user_id, {**state_data, "step": step, "answers": answers})
+
+        kb = make_reply_keyboard(next_step_info.get("buttons"))
         await send_message(
             chat_id,
-            f"<b>({step + 1}/{len(tpl['questions'])})</b> {tpl['questions'][step]}"
+            f"<b>({step + 1}/{len(tpl['steps'])})</b> {next_step_info['question']}",
+            reply_markup=kb
         )
     else:
+        # Barcha savollar tugadi — Word fayl yaratamiz
         await storage.delete(user_id)
         await _generate_and_send(chat_id, tpl, answers)
 
@@ -146,22 +129,45 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     template_docx = tpl["file"]
     output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
 
+    # Fayl mavjudligini qayta tekshirish
+    if not os.path.exists(template_docx):
+        alt_paths = [
+            os.path.join(os.path.dirname(__file__), "..", "templates", "malumotnoma.docx"),
+            os.path.join(os.getcwd(), "templates", "malumotnoma.docx"),
+            "/var/task/templates/malumotnoma.docx"
+        ]
+        for p in alt_paths:
+            if os.path.exists(p):
+                template_docx = p
+                break
+
+    if not os.path.exists(template_docx):
+        await send_message(
+            chat_id,
+            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`malumotnoma.docx`).\n"
+            f"Fayl yo'li: <code>{template_docx}</code>",
+            reply_markup={"remove_keyboard": True}
+        )
+        return
+
     wait_resp = await _send_and_get_id(chat_id, "⏳ Shablon to'ldirilmoqda...")
 
     try:
-        # 1. .docx Shablonni to'ldirish
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None, fill_template, template_docx, output_docx, answers
         )
 
         fio = answers.get("FIO", "hujjat")
+        remove_kb = {"remove_keyboard": True}
+
         await send_document(
             chat_id, output_docx,
             caption=(
-                f"✅ <b>{tpl['name']}</b> tahrirlandi va tayyorlandi!\n"
-                f"Yangi hujjat uchun /start"
-            )
+                f"✅ <b>{tpl['name']}</b> muvaffaqiyatli tahrirlandi!\n\n"
+                f"Yangi hujjat uchun /start yuboring."
+            ),
+            reply_markup=remove_kb
         )
 
         if wait_resp:
@@ -172,7 +178,8 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
             await _delete_message(chat_id, wait_resp)
         await send_message(
             chat_id,
-            f"❌ Xatolik yuz berdi:\n<code>{e}</code>\n\nFayl mavjudligini va /start ni tekshiring."
+            f"❌ Xatolik yuz berdi:\n<code>{e}</code>\n\nQayta boshlash: /start",
+            reply_markup={"remove_keyboard": True}
         )
     finally:
         try:
@@ -209,21 +216,6 @@ async def webhook(request: Request):
     except Exception:
         return Response(status_code=200)
 
-    if "callback_query" in update:
-        cq       = update["callback_query"]
-        user_id  = cq["from"]["id"]
-        chat_id  = cq["message"]["chat"]["id"]
-        msg_id   = cq["message"]["message_id"]
-        cq_id    = cq["id"]
-        data     = cq.get("data", "")
-
-        if data.startswith("tpl:"):
-            tpl_index = int(data.split(":")[1])
-            await handle_template_select(chat_id, user_id, tpl_index, msg_id, cq_id)
-        else:
-            await answer_callback(cq_id)
-        return Response(status_code=200)
-
     if "message" in update:
         msg     = update["message"]
         chat_id = msg["chat"]["id"]
@@ -234,7 +226,11 @@ async def webhook(request: Request):
             await handle_start(chat_id, user_id)
         elif text == "/cancel":
             await storage.delete(user_id)
-            await send_message(chat_id, "❌ Bekor qilindi.\n\nYangi hujjat uchun /start")
+            await send_message(
+                chat_id,
+                "❌ Bekor qilindi.\n\nYangi hujjat yaratish uchun /start",
+                reply_markup={"remove_keyboard": True}
+            )
         elif text:
             await handle_answer(chat_id, user_id, text)
 
@@ -249,7 +245,7 @@ async def set_webhook():
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{TELEGRAM_API}/setWebhook",
-            json={"url": WEBHOOK_URL, "allowed_updates": ["message", "callback_query"]},
+            json={"url": WEBHOOK_URL, "allowed_updates": ["message"]},
             timeout=15
         )
         result = r.json()
