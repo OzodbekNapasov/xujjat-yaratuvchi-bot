@@ -1,5 +1,6 @@
 # ============================================================
 #  api/webhook.py — Vercel Serverless Webhook Handler
+#  Hujjatni PDF (rasm ko'rinishida) shaklida yuboradi
 # ============================================================
 
 import os
@@ -14,9 +15,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 import httpx
 
-from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users, find_template_file
+from config import BOT_TOKEN, WEBHOOK_URL, TEMPLATES, TEMP_DIR, load_allowed_users
 from services.state_storage import storage
-from services.docx_filler import fill_template
+from services.pdf_builder import build_flattened_pdf
 
 app = FastAPI()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -31,18 +32,16 @@ async def send_message(chat_id: int, text: str, reply_markup=None, parse_mode="H
         await client.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=15)
 
 
-async def send_document(chat_id: int, file_path: str, caption: str = "", reply_markup=None):
+async def send_document(chat_id: int, file_path: str, custom_filename: str, caption: str = "", reply_markup=None):
     async with httpx.AsyncClient() as client:
         with open(file_path, "rb") as f:
-            ext = os.path.splitext(file_path)[1].lower()
-            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/pdf"
             data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"}
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
             await client.post(
                 f"{TELEGRAM_API}/sendDocument",
                 data=data,
-                files={"document": (os.path.basename(file_path), f, mime)},
+                files={"document": (custom_filename, f, "application/pdf")},
                 timeout=60,
             )
 
@@ -141,31 +140,28 @@ async def handle_user_input(chat_id: int, user_id: int, text: str):
 
 async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
     uid = uuid.uuid4().hex[:8]
-    filename = tpl.get("filename", "malumotnoma.docx")
-    template_docx = find_template_file(filename)
-    output_docx   = os.path.join(TEMP_DIR, f"doc_{uid}.docx")
+    output_pdf = os.path.join(TEMP_DIR, f"doc_{uid}.pdf")
 
-    if not os.path.exists(template_docx):
-        await send_message(
-            chat_id,
-            f"❌ <b>Xatolik:</b> Shablon fayl topilmadi (`{filename}`).",
-            reply_markup={"remove_keyboard": True}
-        )
-        return
-
-    wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat to'ldirilmoqda...")
+    wait_resp = await _send_and_get_id(chat_id, "⏳ Hujjat PDF shaklida tayyorlanmoqda...")
 
     try:
+        # PDF ni yaratish va rasm shakliga o'tkazish (flattening)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, fill_template, template_docx, output_docx, answers
+            None, build_flattened_pdf, output_pdf, tpl["name"], answers
         )
+
+        fio = answers.get("FIO", "Talaba").strip()
+        custom_pdf_name = f"{fio} ma'lumotnoma.pdf"
 
         remove_kb = {"remove_keyboard": True}
         await send_document(
-            chat_id, output_docx,
+            chat_id,
+            file_path=output_pdf,
+            custom_filename=custom_pdf_name,
             caption=(
-                f"✅ <b>{tpl['name']}</b> muvaffaqiyatli tahrirlandi va tayyorlandi!\n\n"
+                f"✅ <b>{custom_pdf_name}</b> tayyorlandi!\n\n"
+                f"📄 Hujjat PDF formatida (rasm shaklida) yuborildi.\n"
                 f"Yangi hujjat yaratish uchun /start yuboring."
             ),
             reply_markup=remove_kb
@@ -184,8 +180,8 @@ async def _generate_and_send(chat_id: int, tpl: dict, answers: dict):
         )
     finally:
         try:
-            if os.path.exists(output_docx):
-                os.remove(output_docx)
+            if os.path.exists(output_pdf):
+                os.remove(output_pdf)
         except Exception:
             pass
 

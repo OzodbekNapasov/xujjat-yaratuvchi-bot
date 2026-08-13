@@ -1,23 +1,22 @@
 # ============================================================
 #  services/pdf_builder.py
-#  Qarshi Tibbiyot Texnikumi Hujjat Generator (ReportLab + PyMuPDF)
+#  Hujjatni PDF shaklida hosil qiladi va 300 DPI rasmgacha
+#  tekislaydi (rasterize/flatten) — Pechat va imzo sotilib qolmaydi
 # ============================================================
 
 import os
 import io
-import tempfile
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 from PIL import Image
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
 from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from config import LOGO_FILE, PECHAT_FILE, IMZO_FILE, FONT_FILE
 
@@ -30,7 +29,7 @@ def _register_font():
     try:
         if os.path.exists(FONT_FILE):
             pdfmetrics.registerFont(TTFont("FreeSans", FONT_FILE))
-            pdfmetrics.registerFont(TTFont("FreeSans-Bold", FONT_FILE)) # oddiy va bold
+            pdfmetrics.registerFont(TTFont("FreeSans-Bold", FONT_FILE))
             _FONT_REGISTERED = True
     except Exception:
         pass
@@ -42,12 +41,14 @@ def _font(bold=False):
     return "Helvetica-Bold" if bold else "Helvetica"
 
 
-def build_pdf(
-    output_path: str,
+def build_flattened_pdf(
+    output_pdf_path: str,
     template_name: str,
     data: dict,
-    stamp_config: dict,
 ) -> None:
+    """
+    data: {"FIO": "Napasov Diyorbek", "YONALISH": "Hamshiralik ishi", "OQUV_YILI": "2026/2027", "SANA": "13.08.2026"}
+    """
     _register_font()
     fn = _font(bold=False)
     fn_b = _font(bold=True)
@@ -64,23 +65,8 @@ def build_pdf(
 
     story = []
 
-    # ── 1. Tepa qism (Header Table: Uzbek Text | Logo | Russian Text) ─────────
-    style_hdr_left = ParagraphStyle(
-        'HdrLeft',
-        fontName=fn_b,
-        fontSize=8.5,
-        leading=11,
-        alignment=TA_CENTER,
-        textColor=colors.black
-    )
-    style_hdr_right = ParagraphStyle(
-        'HdrRight',
-        fontName=fn_b,
-        fontSize=8.5,
-        leading=11,
-        alignment=TA_CENTER,
-        textColor=colors.black
-    )
+    # 1. Header Table (Uzbek | Logo | Russian)
+    style_hdr = ParagraphStyle('Hdr', fontName=fn_b, fontSize=8.5, leading=11, alignment=TA_CENTER)
 
     text_left = (
         "O’ZBEKISTON RESPUBLIKASI<br/>"
@@ -96,13 +82,13 @@ def build_pdf(
         "«КАРШИНСКИЙ МЕДИЦИНСКИЙ ТЕХНИКУМ»"
     )
 
-    cell_left = Paragraph(text_left, style_hdr_left)
-    cell_right = Paragraph(text_right, style_hdr_right)
+    cell_left = Paragraph(text_left, style_hdr)
+    cell_right = Paragraph(text_right, style_hdr)
 
     if os.path.exists(LOGO_FILE):
         logo_img = RLImage(LOGO_FILE, width=28 * mm, height=28 * mm)
     else:
-        logo_img = Paragraph("<b>LOGO</b>", style_hdr_left)
+        logo_img = Paragraph("<b>Qarshi tibbiyot<br/>texnikumi</b>", style_hdr)
 
     header_table = Table(
         [[cell_left, logo_img, cell_right]],
@@ -111,7 +97,7 @@ def build_pdf(
     header_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('BOX', (0,0), (-1,-1), 0.5, colors.gray), # ramka chegarasi
+        ('BOX', (0,0), (-1,-1), 0.5, colors.gray),
         ('INNERGRID', (0,0), (-1,-1), 0.5, colors.gray),
         ('TOPPADDING', (0,0), (-1,-1), 4),
         ('BOTTOMPADDING', (0,0), (-1,-1), 4),
@@ -120,8 +106,7 @@ def build_pdf(
     story.append(header_table)
     story.append(Spacer(1, 4 * mm))
 
-    # ── 2. Gorizontal chiziq ───────────────────────────────────────────────
-    # Qora qalin chiziq
+    # 2. Border Line
     divider = Table([['']], colWidths=[170 * mm], rowHeights=[1.5])
     divider.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,-1), colors.black),
@@ -131,10 +116,14 @@ def build_pdf(
     story.append(divider)
     story.append(Spacer(1, 3 * mm))
 
-    # ── 3. Shahar va Sana qatori ─────────────────────────────────────────────
+    # 3. Shahar va Sana
+    sana_val = data.get('SANA', '13.08.2026')
+    if not sana_val.endswith("y.") and not sana_val.endswith("y"):
+        sana_val += " y."
+
     style_meta = ParagraphStyle('Meta', fontName=fn, fontSize=11, leading=14)
     meta_left = Paragraph("Qarshi shahri", style_meta)
-    meta_right = Paragraph(f"{data.get('SANA', '12.07.2026 y.')}", ParagraphStyle('MetaR', parent=style_meta, alignment=TA_RIGHT))
+    meta_right = Paragraph(f"{sana_val}", ParagraphStyle('MetaR', parent=style_meta, alignment=TA_RIGHT))
 
     meta_table = Table([[meta_left, meta_right]], colWidths=[85 * mm, 85 * mm])
     meta_table.setStyle(TableStyle([
@@ -145,21 +134,15 @@ def build_pdf(
     story.append(meta_table)
     story.append(Spacer(1, 15 * mm))
 
-    # ── 4. MA'LUMOTNOMA Sarlavhasi ──────────────────────────────────────────
-    style_title = ParagraphStyle(
-        'Title',
-        fontName=fn_b,
-        fontSize=15,
-        leading=18,
-        alignment=TA_CENTER
-    )
+    # 4. Sarlavha
+    style_title = ParagraphStyle('Title', fontName=fn_b, fontSize=15, leading=18, alignment=TA_CENTER)
     story.append(Paragraph("MA’LUMOTNOMA", style_title))
     story.append(Spacer(1, 12 * mm))
 
-    # ── 5. Asosiy Matn ───────────────────────────────────────────────────────
-    fio = data.get('FIO', 'Napasov Ozodbek Zafar o’g’li')
-    yonalish = data.get('YONALISH', 'Hamshiralik ishi')
-    oquv_yili = data.get('OQUV_YILI', '2026/2027')
+    # 5. Asosiy Matn
+    fio = data.get('FIO', '')
+    yonalish = data.get('YONALISH', '')
+    oquv_yili = data.get('OQUV_YILI', '')
     boshlash_yili = oquv_yili.split('/')[0] if '/' in oquv_yili else '2026'
 
     style_body = ParagraphStyle(
@@ -167,82 +150,56 @@ def build_pdf(
         fontName=fn,
         fontSize=12,
         leading=22,
-        alignment=TA_JUSTIFY,
-        firstLineIndent=15 * mm
+        alignment=TA_CENTER,
     )
 
     body_html = (
-        f"Ushbu ma’lumotnoma shuni tasdiqlaydiki, haqiqatdan ham "
-        f"<b>{fio}</b> {oquv_yili}-o‘quv yilida <b>{yonalish}</b> "
-        f"yo‘nalishiga shartnoma asosida o‘qishga qabul qilindi. Talaba o‘qishni {boshlash_yili}-yil "
-        f"sentyabr oyidan boshlaydi."
+        f"Ushbu  ma’lumotnoma  shuni  tasdiqlaydiki,  haqiqatdan  ham<br/><br/>"
+        f"<b>{fio}</b>  <b>{oquv_yili}</b>-o‘quv yilida  <b>{yonalish}</b>  yo‘nalishiga  shartnoma "
+        f"asosida o‘qishga qabul qilindi. Talaba o‘qishni {boshlash_yili}-yil sentyabr oyidan boshlaydi."
     )
     story.append(Paragraph(body_html, style_body))
-    story.append(Spacer(1, 8 * mm))
+    story.append(Spacer(1, 10 * mm))
 
-    # ── 6. Ma'lumotnoma berilish maqsadi ─────────────────────────────────────
-    style_note = ParagraphStyle(
-        'NoteText',
-        fontName=fn,
-        fontSize=11,
-        leading=15,
-        alignment=TA_CENTER
-    )
+    # 6. Note
+    style_note = ParagraphStyle('NoteText', fontName=fn, fontSize=10.5, leading=15, alignment=TA_CENTER)
     story.append(Paragraph("<i>Ma’lumotnoma so‘ralgan joyga taqdim etish uchun berildi</i>", style_note))
-    story.append(Spacer(1, 25 * mm))
+    story.append(Spacer(1, 20 * mm))
 
-    # ── 7. Imzo qismi (Footer Table) ─────────────────────────────────────────
+    # 7. Footer (Imzo va Pechat)
     style_footer_l = ParagraphStyle('FootL', fontName=fn_b, fontSize=11, leading=14, alignment=TA_LEFT)
     style_footer_r = ParagraphStyle('FootR', fontName=fn_b, fontSize=11, leading=14, alignment=TA_RIGHT)
 
     foot_l = Paragraph("“Qarshi tibbiyot texnikumi”<br/>ijrochi direktori:", style_footer_l)
-    foot_r = Paragraph("<u>Sh.Raxmonov</u>", style_footer_r)
+    foot_r = Paragraph("Sh.Raxmonov", style_footer_r)
 
     foot_table = Table([[foot_l, foot_r]], colWidths=[100 * mm, 70 * mm])
     foot_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
         ('RIGHTPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(foot_table)
 
-    # Qurish
+    # Clean PDF hosil qilish
     doc.build(story)
 
-    # ── 8. Pechat va imzo qo'yish (PyMuPDF) ────────────────────────────────
-    pdf_bytes = buf.getvalue()
-    _add_stamps(pdf_bytes, output_path, stamp_config)
+    raw_pdf_bytes = buf.getvalue()
 
+    # ── 8. RASTERIZE & FLATTEN (PDF sahifasini 300 DPI rasmga aylantirish) ──────
+    # PyMuPDF orqali PDF ni rasmga o'tkazamiz va yangi PDF ga rasm shaklida joylaymiz
+    doc_raw = pymupdf.open(stream=raw_pdf_bytes, filetype="pdf")
+    doc_flat = pymupdf.open()
 
-def _add_stamps(pdf_bytes: bytes, output_path: str, stamp_config: dict) -> None:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[-1]
+    for page_num in range(len(doc_raw)):
+        page = doc_raw[page_num]
+        # 300 DPI rasmgacha oshiramiz (haqiqiy skaner qilingan sifat)
+        pix = page.get_pixmap(dpi=300)
 
-    PT = 2.8346
+        # Yangi A4 sahifa
+        new_page = doc_flat.new_page(width=page.rect.width, height=page.rect.height)
+        new_page.insert_image(new_page.rect, stream=pix.tobytes("png"))
 
-    def place_img(img_path: str, cfg: dict):
-        if not img_path or not os.path.exists(img_path):
-            return
-        x0 = cfg["x_mm"] * PT
-        y0 = cfg["y_mm"] * PT
-        x1 = x0 + cfg["w_mm"] * PT
-        y1 = y0 + cfg["h_mm"] * PT
-        rect = fitz.Rect(x0, y0, x1, y1)
-
-        img = Image.open(img_path).convert("RGBA")
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        img.save(tmp.name)
-        tmp.close()
-        page.insert_image(rect, filename=tmp.name, overlay=True)
-        os.unlink(tmp.name)
-
-    pechat_cfg = stamp_config.get("pechat", {})
-    imzo_cfg   = stamp_config.get("imzo",   {})
-
-    if pechat_cfg:
-        place_img(PECHAT_FILE, pechat_cfg)
-    if imzo_cfg:
-        place_img(IMZO_FILE, imzo_cfg)
-
-    doc.save(output_path, deflate=True)
-    doc.close()
+    doc_flat.save(output_pdf_path, deflate=True)
+    doc_flat.close()
+    doc_raw.close()
